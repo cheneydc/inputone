@@ -92,7 +92,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @objc private func toggleLock() {
-        guard AXIsProcessTrusted() else { return }
+        guard AXIsProcessTrusted() else {
+            checkAccessibilityPermission()
+            return
+        }
         settings.isLocking.toggle()
         if settings.isLocking {
             if let current = manager.currentInputSourceInfo() {
@@ -180,13 +183,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         guard !AXIsProcessTrusted() else { return }
         let alert = NSAlert()
         alert.messageText = "Accessibility Permission Required"
-        alert.informativeText = "InputOne needs Accessibility access to control input methods. Please grant it in System Settings → Privacy & Security → Accessibility."
+        alert.informativeText = "InputOne needs Accessibility access to control input methods.\n\nPlease grant access in:\nSystem Settings → Privacy & Security → Accessibility\n\nAfter granting, click \"Check Again\" to verify."
         alert.addButton(withTitle: "Open Settings")
+        alert.addButton(withTitle: "Check Again")
         alert.addButton(withTitle: "Later")
         let response = alert.runModal()
         if response == .alertFirstButtonReturn {
             let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility")!
             NSWorkspace.shared.open(url)
+        } else if response == .alertSecondButtonReturn {
+            checkAccessibilityPermission()
         }
     }
 }

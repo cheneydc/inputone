@@ -5,59 +5,76 @@ PROJECT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 BUILD_DIR="$PROJECT_DIR/.build"
 PRODUCT="InputOne"
 
-echo "==> Building release binary (arm64 + x86_64)..."
+echo "==> Building universal binary (arm64 + x86_64)..."
 swift build -c release --arch arm64 --arch x86_64 --package-path "$PROJECT_DIR"
 
-BINARY="$BUILD_DIR/apple/Products/Release/$PRODUCT"
-echo "==> Binary at: $BINARY"
+UNIVERSAL_BINARY="$BUILD_DIR/apple/Products/Release/$PRODUCT"
+echo "==> Universal binary at: $UNIVERSAL_BINARY"
 
-APP_BUNDLE="$PROJECT_DIR/build/$PRODUCT.app"
-echo "==> Creating bundle at $APP_BUNDLE"
-rm -rf "$APP_BUNDLE"
-mkdir -p "$APP_BUNDLE/Contents/MacOS"
-mkdir -p "$APP_BUNDLE/Contents/Resources"
+# Extract single-arch binaries using lipo
+BINARY_ARM64="${UNIVERSAL_BINARY}_arm64"
+BINARY_X86_64="${UNIVERSAL_BINARY}_x86_64"
 
-cp "$BINARY" "$APP_BUNDLE/Contents/MacOS/$PRODUCT"
-cp "$PROJECT_DIR/Resources/Info.plist" "$APP_BUNDLE/Contents/"
+lipo "$UNIVERSAL_BINARY" -thin arm64 -output "$BINARY_ARM64"
+lipo "$UNIVERSAL_BINARY" -thin x86_64 -output "$BINARY_X86_64"
+echo "==> Extracted arm64: $BINARY_ARM64"
+echo "==> Extracted x86_64: $BINARY_X86_64"
 
-# Copy resource bundle (contains lock.png)
-RESOURCE_BUNDLE="$BUILD_DIR/apple/Products/Release/${PRODUCT}_${PRODUCT}.bundle"
-if [ -d "$RESOURCE_BUNDLE" ]; then
-    cp -R "$RESOURCE_BUNDLE" "$APP_BUNDLE/Contents/Resources/"
-fi
+build_dmg() {
+    local arch=$1
+    local binary=$2
+    local suffix="${arch}"
+    local app_bundle="$PROJECT_DIR/build/${PRODUCT}-${suffix}.app"
+    local dmg_path="$PROJECT_DIR/build/${PRODUCT}-${suffix}.dmg"
 
-if [ -f "$PROJECT_DIR/Resources/AppIcon.icns" ]; then
-    cp "$PROJECT_DIR/Resources/AppIcon.icns" "$APP_BUNDLE/Contents/Resources/"
-fi
+    echo ""
+    echo "==> Creating ${arch} bundle..."
+    rm -rf "$app_bundle"
+    mkdir -p "$app_bundle/Contents/MacOS"
+    mkdir -p "$app_bundle/Contents/Resources"
 
-echo "==> Bundle created: $APP_BUNDLE"
-echo "==> Size: $(du -sh "$APP_BUNDLE" | cut -f1)"
+    cp "$binary" "$app_bundle/Contents/MacOS/$PRODUCT"
+    cp "$PROJECT_DIR/Resources/Info.plist" "$app_bundle/Contents/"
 
-# Build .dmg disk image
+    RESOURCE_BUNDLE="$BUILD_DIR/apple/Products/Release/${PRODUCT}_${PRODUCT}.bundle"
+    if [ -d "$RESOURCE_BUNDLE" ]; then
+        cp -R "$RESOURCE_BUNDLE" "$app_bundle/Contents/Resources/"
+    fi
+
+    if [ -f "$PROJECT_DIR/Resources/AppIcon.icns" ]; then
+        cp "$PROJECT_DIR/Resources/AppIcon.icns" "$app_bundle/Contents/Resources/"
+    fi
+
+    echo "==> Ad-hoc signing ${arch} bundle..."
+    codesign --force --deep --sign - "$app_bundle" 2>&1
+
+    echo ""
+    echo "==> Building ${arch} DMG..."
+    rm -f "$dmg_path"
+
+    local dmg_tmp="$PROJECT_DIR/build/.dmg-tmp-${arch}"
+    rm -rf "$dmg_tmp"
+    mkdir -p "$dmg_tmp"
+
+    cp -R "$app_bundle" "$dmg_tmp/"
+    ln -s /Applications "$dmg_tmp/Applications"
+
+    hdiutil create \
+        -volname "${PRODUCT} (${arch})" \
+        -srcfolder "$dmg_tmp" \
+        -ov \
+        -format UDZO \
+        -imagekey zlib-level=9 \
+        "$dmg_path" 2>&1
+
+    rm -rf "$dmg_tmp"
+    echo "==> ${arch} DMG created: $dmg_path"
+    echo "==> Size: $(du -sh "$dmg_path" | cut -f1)"
+}
+
+build_dmg "arm64" "$BINARY_ARM64"
+build_dmg "x86_64" "$BINARY_X86_64"
+
 echo ""
-echo "==> Building .dmg disk image..."
-DMG_PATH="$PROJECT_DIR/build/$PRODUCT.dmg"
-rm -f "$DMG_PATH"
-
-# Create a temporary directory for DMG contents
-DMG_TMP="$PROJECT_DIR/build/.dmg-tmp"
-rm -rf "$DMG_TMP"
-mkdir -p "$DMG_TMP"
-
-# Copy app bundle and create a symlink to /Applications
-cp -R "$APP_BUNDLE" "$DMG_TMP/"
-ln -s /Applications "$DMG_TMP/Applications"
-
-# Create the DMG
-hdiutil create \
-    -volname "$PRODUCT" \
-    -srcfolder "$DMG_TMP" \
-    -ov \
-    -format UDZO \
-    -imagekey zlib-level=9 \
-    "$DMG_PATH" 2>&1
-
-rm -rf "$DMG_TMP"
-
-echo "==> DMG created: $DMG_PATH"
-echo "==> Size: $(du -sh "$DMG_PATH" | cut -f1)"
+echo "==> All done! DMGs in build/:"
+ls -lh "$PROJECT_DIR/build/"*.dmg 2>/dev/null
